@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<schema xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.microsoft.com/windows/2006/propertydescription" schemaVersion="1.0">
+	<propertyDescriptionList publisher="SCell555" product="VTF Shell Extension">
+    <propertyDescription name="VTFShellInfo.ImageDepth" formatID="{64258FCA-9579-4F73-B280-C0F0BDB866B8}" propID="160">
+			<description>Number of layers in 3D image.</description>
+			<typeInfo type="UInt32" isInnate="true" isViewable="true" />
+			<labelInfo label="Depth" />
+		</propertyDescription>
+		<propertyDescription name="VTFShellInfo.MipMapCount" formatID="{64258FCA-9579-4F73-B280-C0F0BDB866B8}" propID="161">
+			<description>Number of MipMaps.</description>
+			<typeInfo type="UInt32" isInnate="true" isViewable="true" />
+			<labelInfo label="MipMaps" />
+		</propertyDescription>
+		<propertyDescription name="VTFShellInfo.FaceCount" formatID="{64258FCA-9579-4F73-B280-C0F0BDB866B8}" propID="162">
+			<description>Number of faces.</description>
+			<typeInfo type="UInt32" isInnate="true" isViewable="true" />
+			<labelInfo label="Faces" />
+		</propertyDescription>
+		<propertyDescription name="VTFShellInfo.FrameCount" formatID="{64258FCA-9579-4F73-B280-C0F0BDB866B8}" propID="163">
+			<description>Number of frames in animated images.</description>
+			<typeInfo type="UInt32" isInnate="true" isViewable="true" />
+			<labelInfo label="Frames" />
+		</propertyDescription>
+		<propertyDescription name="VTFShellInfo.Flags" formatID="{64258FCA-9579-4F73-B280-C0F0BDB866B8}" propID="164">
+			<description>Image flags.</description>
+			<typeInfo type="UInt32" isInnate="true" isViewable="true" />
+			<labelInfo label="Flags" />
+		</propertyDescription>
+    <propertyDescription name="VTFShellInfo.FormatName" formatID="{64258FCA-9579-4F73-B280-C0F0BDB866B8}" propID="165">
+			<description>Name of image format.</description>
+			<typeInfo type="String" isInnate="true" isViewable="true" />
+			<labelInfo label="Format" />
+		</propertyDescription>
+	</propertyDescriptionList>
+</schema>
