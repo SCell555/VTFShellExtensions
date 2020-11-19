@@ -61,8 +61,8 @@ STDAPI DllRegisterServer()
 STDAPI DllUnregisterServer()
 {
 	REGKEY_DELETEKEY keys[] = {
-		{ HKEY_CLASSES_ROOT, L"CLSID\\" szCLSID_VTFThumbnailProvider },
 		{ HKEY_CLASSES_ROOT, L"CLSID\\" szCLSID_VTFThumbnailProvider L"\\InprocServer32" },
+		{ HKEY_CLASSES_ROOT, L"CLSID\\" szCLSID_VTFThumbnailProvider },
 		{ HKEY_CLASSES_ROOT, L".vtf\\ShellEx\\{E357FCCD-A995-4576-B01F-234630154E96}" }
 	};
 	return DeleteRegistryKeys( keys, ARRAYSIZE( keys ) );

@@ -96,8 +96,8 @@ STDAPI DllUnregisterServer()
 		return hr;
 
 	REGKEY_DELETEKEY keys[] = {
-		{ HKEY_CLASSES_ROOT, L"CLSID\\" szCLSID_VTFShellInfo },
 		{ HKEY_CLASSES_ROOT, L"CLSID\\" szCLSID_VTFShellInfo L"\\InprocServer32" },
+		{ HKEY_CLASSES_ROOT, L"CLSID\\" szCLSID_VTFShellInfo },
 		{ HKEY_CLASSES_ROOT, L"SystemFileAssociations\\.vtf" },
 		{ HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\PropertySystem\\PropertyHandlers\\.vtf" }
 	};
