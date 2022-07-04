@@ -1,7 +1,13 @@
 #define INITGUID
 #include "Common.h"
 
-static LONG g_cRef = 0;
+#ifdef _AMD64_
+#pragma comment(linker, "\"/manifestdependency:type='Win32' name='Microsoft.Windows.GdiPlus' version='1.1.0.0' processorArchitecture='amd64' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#else
+#pragma comment(linker, "\"/manifestdependency:type='Win32' name='Microsoft.Windows.GdiPlus' version='1.1.0.0' processorArchitecture='X86' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#endif
+
+static volatile LONG g_cRef = 0;
 
 struct REGKEY_DELETEKEY
 {
@@ -21,6 +27,7 @@ struct REGKEY_SUBKEY_AND_VALUE
 static HRESULT CreateRegistryKeys( REGKEY_SUBKEY_AND_VALUE* aKeys, ULONG cKeys );
 static HRESULT DeleteRegistryKeys( REGKEY_DELETEKEY* aKeys, ULONG cKeys );
 
+_Use_decl_annotations_
 STDAPI DllCanUnloadNow()
 {
 	return g_cRef ? S_FALSE : S_OK;

@@ -2,6 +2,11 @@
 #include <cstring>
 #include <cmath>
 
+#ifndef SHELLINFO_EXPORTS
+#undef next_in
+#include "zlib.h"
+#endif
+
 enum CubeMapFaceIndex_t
 {
 	CUBEMAP_FACE_RIGHT = 0,
@@ -19,8 +24,7 @@ enum CubeMapFaceIndex_t
 };
 
 #define VTF_MAJOR_VERSION 7
-#define VTF_MINOR_VERSION 5
-#define VTF_MINOR_VERSION_DEFAULT 5
+#define VTF_MINOR_VERSION 6
 #define VTF_MINOR_VERSION_MIN_SPHERE_MAP	1
 #define VTF_MINOR_VERSION_MIN_VOLUME		2
 #define VTF_MINOR_VERSION_MIN_RESOURCE		3
@@ -334,7 +338,10 @@ vlBool CVTFFile::Load( IO::Readers::IReader *Reader, vlBool bHeaderOnly )
 			this->Header->Depth = 1;
 		}
 
-		this->Header->ResourceCount = 0;
+		if ( !( this->Header->Version[0] > VTF_MAJOR_VERSION || ( this->Header->Version[0] == VTF_MAJOR_VERSION && this->Header->Version[1] >= VTF_MINOR_VERSION_MIN_RESOURCE ) ) )
+		{
+			this->Header->ResourceCount = 0;
+		}
 
 		if ( bHeaderOnly )
 		{
@@ -353,7 +360,7 @@ vlBool CVTFFile::Load( IO::Readers::IReader *Reader, vlBool bHeaderOnly )
 			this->uiThumbnailBufferSize = 0;
 		}
 
-		vlUInt uiThumbnailBufferOffset = 0, uiImageDataOffset = 0;
+		vlUInt uiThumbnailBufferOffset = 0, uiImageDataOffset = 0, uiImageBufferSize = this->uiImageBufferSize;
 		if ( this->Header->ResourceCount )
 		{
 			if ( this->Header->ResourceCount > VTF_RSRC_MAX_DICTIONARY_ENTRIES )
@@ -382,6 +389,62 @@ vlBool CVTFFile::Load( IO::Readers::IReader *Reader, vlBool bHeaderOnly )
 						throw 0;
 					}
 					uiImageDataOffset = this->Header->Resources[i].Data;
+					break;
+				case VTF_RSRC_AUX_COMPRESSION_INFO:
+				{
+					if ( this->Header->Resources[i].Data + sizeof( vlUInt ) > uiFileSize )
+					{
+						throw 0;
+					}
+
+					vlUInt uiSize = 0;
+					Reader->Seek( this->Header->Resources[i].Data, FILE_BEGIN );
+					if ( Reader->Read( &uiSize, sizeof( vlUInt ) ) != sizeof( vlUInt ) )
+					{
+						throw 0;
+					}
+
+					if ( this->Header->Resources[i].Data + sizeof( vlUInt ) + uiSize > uiFileSize )
+					{
+						throw 0;
+					}
+
+					this->Header->Data[i].Size = uiSize;
+					auto pCompressionInfo = this->Header->Data[i].Data = new vlByte[uiSize];
+					if ( Reader->Read( this->Header->Data[i].Data, uiSize ) != uiSize )
+					{
+						throw 0;
+					}
+
+					vlUInt uiFrameCount = this->Header->Frames;
+					vlUInt uiFaceCount = this->GetFaceCount();
+					vlUInt uiSliceCount = this->Header->Depth;
+					vlUInt uiMipCount = this->Header->MipCount;
+
+					bool bIsAuxCompressed = false;
+					if ( uiSize > sizeof( AuxCompressionInfoHeader_t ) )
+						bIsAuxCompressed = ( (AuxCompressionInfoHeader_t *)pCompressionInfo )->m_CompressionLevel != 0;
+
+					if ( bIsAuxCompressed )
+					{
+						uiImageBufferSize = 0;
+						for ( vlInt iMip = uiMipCount - 1; iMip >= 0; --iMip )
+						{
+							for ( vlUInt iFrame = 0; iFrame < uiFrameCount; ++iFrame )
+							{
+								for ( vlUInt iFace = 0; iFace < uiFaceCount; ++iFace )
+								{
+									vlUInt infoOffset = GetAuxInfoOffset( iFrame, iFace, iMip );
+
+									AuxCompressionInfoEntry_t *infoEntry = (AuxCompressionInfoEntry_t *)( pCompressionInfo + infoOffset );
+
+									uiImageBufferSize += infoEntry->m_CompressedSize;
+								}
+							}
+						}
+					}
+
+				}
 					break;
 				default:
 					if ( ( this->Header->Resources[i].Flags & RSRCF_HAS_NO_DATA_CHUNK ) == 0 )
@@ -420,7 +483,7 @@ vlBool CVTFFile::Load( IO::Readers::IReader *Reader, vlBool bHeaderOnly )
 			uiImageDataOffset = uiThumbnailBufferOffset + this->uiThumbnailBufferSize;
 		}
 
-		if ( this->Header->HeaderSize > uiFileSize || uiThumbnailBufferOffset + this->uiThumbnailBufferSize > uiFileSize || uiImageDataOffset + this->uiImageBufferSize > uiFileSize )
+		if ( this->Header->HeaderSize > uiFileSize || uiThumbnailBufferOffset + this->uiThumbnailBufferSize > uiFileSize || uiImageDataOffset + uiImageBufferSize > uiFileSize )
 		{
 			throw 0;
 		}
@@ -448,10 +511,10 @@ vlBool CVTFFile::Load( IO::Readers::IReader *Reader, vlBool bHeaderOnly )
 
 		if ( this->Header->ImageFormat != IMAGE_FORMAT_NONE )
 		{
-			this->lpImageData = new vlByte[this->uiImageBufferSize];
+			this->lpImageData = new vlByte[uiImageBufferSize];
 
 			Reader->Seek( uiImageDataOffset, FILE_BEGIN );
-			if ( Reader->Read( this->lpImageData, this->uiImageBufferSize ) != this->uiImageBufferSize )
+			if ( Reader->Read( this->lpImageData, uiImageBufferSize ) != uiImageBufferSize )
 			{
 				throw 0;
 			}
@@ -503,6 +566,14 @@ vlUInt CVTFFile::GetFrameCount() const
 	return this->Header->Frames;
 }
 
+vlUInt CVTFFile::GetFlags() const
+{
+	if ( !this->IsLoaded() )
+		return 0;
+
+	return this->Header->Flags;
+}
+
 vlUInt CVTFFile::GetFaceCount() const
 {
 	if ( !this->IsLoaded() )
@@ -527,6 +598,63 @@ vlByte *CVTFFile::GetData( vlUInt uiFrame, vlUInt uiFace, vlUInt uiSlice, vlUInt
 	return this->lpImageData + this->ComputeDataOffset( uiFrame, uiFace, uiSlice, uiMipmapLevel, this->Header->ImageFormat );
 }
 
+vlVoid *CVTFFile::GetResourceData( vlUInt uiType, vlUInt &uiSize ) const
+{
+	if ( this->IsLoaded() )
+	{
+		if ( this->Header->Version[0] > VTF_MAJOR_VERSION || ( this->Header->Version[0] == VTF_MAJOR_VERSION && this->Header->Version[1] >= VTF_MINOR_VERSION_MIN_RESOURCE ) )
+		{
+			switch ( uiType )
+			{
+			case VTF_LEGACY_RSRC_LOW_RES_IMAGE:
+				uiSize = this->uiThumbnailBufferSize;
+				return this->lpThumbnailImageData;
+				break;
+			case VTF_LEGACY_RSRC_IMAGE:
+				uiSize = this->uiImageBufferSize;
+				return this->lpImageData;
+				break;
+			default:
+				for ( vlUInt i = 0; i < this->Header->ResourceCount; i++ )
+				{
+					if ( this->Header->Resources[i].Type == uiType )
+					{
+						if ( this->Header->Resources[i].Flags & RSRCF_HAS_NO_DATA_CHUNK )
+						{
+							uiSize = sizeof( vlUInt );
+							return &this->Header->Resources[i].Data;
+						}
+						else
+						{
+							uiSize = this->Header->Data[i].Size;
+							return this->Header->Data[i].Data;
+						}
+					}
+				}
+				break;
+			}
+		}
+	}
+
+	uiSize = 0;
+	return 0;
+}
+
+vlUInt CVTFFile::GetAuxInfoOffset( vlUInt iFrame, vlUInt iFace, vlUInt iMipLevel ) const
+{
+	vlUInt faceCount = GetFaceCount();
+	return sizeof( AuxCompressionInfoHeader_t ) +
+		( ( this->Header->MipCount - 1 - iMipLevel ) * this->Header->Frames * faceCount +
+			iFrame * faceCount +
+			iFace ) *
+		sizeof( AuxCompressionInfoEntry_t );
+}
+
+const SVTFHeader& CVTFFile::GetHeader() const
+{
+	return *this->Header;
+}
+
 VTFImageFormat CVTFFile::GetFormat() const
 {
 	if ( !this->IsLoaded() )
@@ -535,47 +663,47 @@ VTFImageFormat CVTFFile::GetFormat() const
 	return this->Header->ImageFormat;
 }
 
-static SVTFImageFormatInfo VTFImageFormatInfo[] =
+static constexpr SVTFImageFormatInfo VTFImageFormatInfo[] =
 {
-	{ "RGBA8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA8888,
-	{ "ABGR8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_ABGR8888,
-	{ "RGB888",				 24,  3,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB888,
-	{ "BGR888",				 24,  3,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGR888,
-	{ "RGB565",				 16,  2,  5,  6,  5,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB565,
-	{ "I8",					  8,  1,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_I8,
-	{ "IA88",				 16,  2,  0,  0,  0,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_IA88
-	{ "P8",					  8,  1,  0,  0,  0,  0, vlFalse, vlFalse },		// IMAGE_FORMAT_P8
-	{ "A8",					  8,  1,  0,  0,  0,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_A8
-	{ "RGB888 Bluescreen",	 24,  3,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB888_BLUESCREEN
-	{ "BGR888 Bluescreen",	 24,  3,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGR888_BLUESCREEN
-	{ "ARGB8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_ARGB8888
-	{ "BGRA8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRA8888
-	{ "DXT1",				  4,  0,  0,  0,  0,  0,  vlTrue,  vlTrue },		// IMAGE_FORMAT_DXT1
-	{ "DXT3",				  8,  0,  0,  0,  0,  8,  vlTrue,  vlTrue },		// IMAGE_FORMAT_DXT3
-	{ "DXT5",				  8,  0,  0,  0,  0,  8,  vlTrue,  vlTrue },		// IMAGE_FORMAT_DXT5
-	{ "BGRX8888",			 32,  4,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRX8888
-	{ "BGR565",				 16,  2,  5,  6,  5,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGR565
-	{ "BGRX5551",			 16,  2,  5,  5,  5,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRX5551
-	{ "BGRA4444",			 16,  2,  4,  4,  4,  4, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRA4444
-	{ "DXT1 One Bit Alpha",	  4,  0,  0,  0,  0,  1,  vlTrue,  vlTrue },		// IMAGE_FORMAT_DXT1_ONEBITALPHA
-	{ "BGRA5551",			 16,  2,  5,  5,  5,  1, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRA5551
-	{ "UV88",				 16,  2,  8,  8,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_UV88
-	{ "UVWQ8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_UVWQ8899
-	{ "RGBA16161616F",		 64,  8, 16, 16, 16, 16, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA16161616F
-	{ "RGBA16161616",		 64,  8, 16, 16, 16, 16, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA16161616
-	{ "UVLX8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_UVLX8888
-	{ "R32F",				 32,  4, 32,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_R32F
-	{ "RGB323232F",			 96, 12, 32, 32, 32,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB323232F
-	{ "RGBA32323232F",		128, 16, 32, 32, 32, 32, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA32323232F
-	{ "nVidia DST16",		 16,  2,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_DST16
-	{ "nVidia DST24",		 24,  3,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_DST24
-	{ "nVidia INTZ",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_INTZ
-	{ "nVidia RAWZ",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_RAWZ
-	{ "ATI DST16",			 16,  2,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_ATI_DST16
-	{ "ATI DST24",			 24,  3,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_ATI_DST24
-	{ "nVidia NULL",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_NULL
-	{ "ATI1N",				  4,  0,  0,  0,  0,  0,  vlTrue,  vlTrue },		// IMAGE_FORMAT_ATI1N
-	{ "ATI2N",				  8,  0,  0,  0,  0,  0,  vlTrue,  vlTrue }			// IMAGE_FORMAT_ATI2N
+	{ L"RGBA8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA8888,
+	{ L"ABGR8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_ABGR8888,
+	{ L"RGB888",			 24,  3,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB888,
+	{ L"BGR888",			 24,  3,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGR888,
+	{ L"RGB565",			 16,  2,  5,  6,  5,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB565,
+	{ L"I8",				  8,  1,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_I8,
+	{ L"IA88",				 16,  2,  0,  0,  0,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_IA88
+	{ L"P8",				  8,  1,  0,  0,  0,  0, vlFalse, vlFalse },		// IMAGE_FORMAT_P8
+	{ L"A8",				  8,  1,  0,  0,  0,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_A8
+	{ L"RGB888 Bluescreen",	 24,  3,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB888_BLUESCREEN
+	{ L"BGR888 Bluescreen",	 24,  3,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGR888_BLUESCREEN
+	{ L"ARGB8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_ARGB8888
+	{ L"BGRA8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRA8888
+	{ L"DXT1",				  4,  0,  0,  0,  0,  0,  vlTrue,  vlTrue },		// IMAGE_FORMAT_DXT1
+	{ L"DXT3",				  8,  0,  0,  0,  0,  8,  vlTrue,  vlTrue },		// IMAGE_FORMAT_DXT3
+	{ L"DXT5",				  8,  0,  0,  0,  0,  8,  vlTrue,  vlTrue },		// IMAGE_FORMAT_DXT5
+	{ L"BGRX8888",			 32,  4,  8,  8,  8,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRX8888
+	{ L"BGR565",			 16,  2,  5,  6,  5,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGR565
+	{ L"BGRX5551",			 16,  2,  5,  5,  5,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRX5551
+	{ L"BGRA4444",			 16,  2,  4,  4,  4,  4, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRA4444
+	{ L"DXT1 One Bit Alpha",  4,  0,  0,  0,  0,  1,  vlTrue,  vlTrue },		// IMAGE_FORMAT_DXT1_ONEBITALPHA
+	{ L"BGRA5551",			 16,  2,  5,  5,  5,  1, vlFalse,  vlTrue },		// IMAGE_FORMAT_BGRA5551
+	{ L"UV88",				 16,  2,  8,  8,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_UV88
+	{ L"UVWQ8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_UVWQ8899
+	{ L"RGBA16161616F",		 64,  8, 16, 16, 16, 16, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA16161616F
+	{ L"RGBA16161616",		 64,  8, 16, 16, 16, 16, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA16161616
+	{ L"UVLX8888",			 32,  4,  8,  8,  8,  8, vlFalse,  vlTrue },		// IMAGE_FORMAT_UVLX8888
+	{ L"R32F",				 32,  4, 32,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_R32F
+	{ L"RGB323232F",		 96, 12, 32, 32, 32,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB323232F
+	{ L"RGBA32323232F",		128, 16, 32, 32, 32, 32, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA32323232F
+	{ L"nVidia DST16",		 16,  2,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_DST16
+	{ L"nVidia DST24",		 24,  3,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_DST24
+	{ L"nVidia INTZ",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_INTZ
+	{ L"nVidia RAWZ",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_RAWZ
+	{ L"ATI DST16",			 16,  2,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_ATI_DST16
+	{ L"ATI DST24",			 24,  3,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_ATI_DST24
+	{ L"nVidia NULL",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_NULL
+	{ L"ATI1N",				  4,  0,  0,  0,  0,  0,  vlTrue,  vlTrue },		// IMAGE_FORMAT_ATI1N
+	{ L"ATI2N",				  8,  0,  0,  0,  0,  0,  vlTrue,  vlTrue }			// IMAGE_FORMAT_ATI2N
 };
 
 SVTFImageFormatInfo const &CVTFFile::GetImageFormatInfo( VTFImageFormat ImageFormat )
@@ -705,6 +833,42 @@ vlUInt CVTFFile::ComputeDataOffset( vlUInt uiFrame, vlUInt uiFace, vlUInt uiSlic
 	if ( uiMipLevel >= uiMipCount )
 	{
 		uiMipLevel = uiMipCount - 1;
+	}
+
+	bool bIsAuxCompressed = false;
+	vlUInt compressionInfoSize = 0;
+	unsigned char *pCompressionInfo = (unsigned char *)GetResourceData( VTF_RSRC_AUX_COMPRESSION_INFO, compressionInfoSize );
+	if ( pCompressionInfo != nullptr )
+	{
+		AuxCompressionInfoHeader_t *infoHeader = (AuxCompressionInfoHeader_t *)pCompressionInfo;
+
+		if ( compressionInfoSize > sizeof( AuxCompressionInfoHeader_t ) )
+			bIsAuxCompressed = infoHeader->m_CompressionLevel != 0;
+	}
+
+	if ( bIsAuxCompressed )
+	{
+		// For aux compression, we have to go through the compression info resource
+		// to find the correct offset
+		for ( vlInt iMip = uiMipCount - 1; iMip >= static_cast<vlInt>( uiMipLevel ); --iMip )
+		{
+			for ( vlUInt iFrame = 0; iFrame < uiFrameCount; ++iFrame )
+			{
+				for ( vlUInt iFace = 0; iFace < uiFaceCount; ++iFace )
+				{
+					vlUInt infoOffset = GetAuxInfoOffset( iFrame, iFace, iMip );
+
+					AuxCompressionInfoEntry_t *infoEntry = (AuxCompressionInfoEntry_t *)( pCompressionInfo + infoOffset );
+
+					if ( iMip == uiMipLevel && iFrame == uiFrame && iFace == uiFace )
+						return uiOffset;
+
+					uiOffset += infoEntry->m_CompressedSize;
+				}
+			}
+		}
+
+		return uiOffset;
 	}
 
 	for ( vlInt i = ( vlInt )uiMipCount - 1; i > ( vlInt )uiMipLevel; i-- )
@@ -1179,7 +1343,6 @@ T Expand( T S, T SourceBits, T DestBits )
 	return D;
 }
 
-vlSingle sHDRLogAverageLuminance;
 template<typename T, typename U>
 vlBool ConvertTemplated( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUInt uiHeight, const SVTFImageConvertInfo& SourceInfo, const SVTFImageConvertInfo& DestInfo )
 {
@@ -1191,25 +1354,6 @@ vlBool ConvertTemplated( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUIn
 
 	GetShiftAndMask<vlUInt16>( SourceInfo, uiSourceRShift, uiSourceGShift, uiSourceBShift, uiSourceAShift, uiSourceRMask, uiSourceGMask, uiSourceBMask, uiSourceAMask );
 	GetShiftAndMask<vlUInt16>( DestInfo, uiDestRShift, uiDestGShift, uiDestBShift, uiDestAShift, uiDestRMask, uiDestGMask, uiDestBMask, uiDestAMask );
-
-	if ( SourceInfo.Format == IMAGE_FORMAT_RGBA16161616F )
-	{
-		vlByte* lpFPSource = lpSource;
-
-		sHDRLogAverageLuminance = 0.0f;
-
-		vlByte *lpFPSourceEnd = lpFPSource + ( uiWidth * uiHeight * SourceInfo.uiBytesPerPixel );
-		for ( ; lpFPSource < lpFPSourceEnd; lpFPSource += SourceInfo.uiBytesPerPixel )
-		{
-			vlUInt16* p = ( vlUInt16* )lpFPSource;
-
-			vlSingle sLuminance = ( vlSingle )p[0] * 0.299f + ( vlSingle )p[1] * 0.587f + ( vlSingle )p[2] * 0.114f;
-
-			sHDRLogAverageLuminance += log( 0.0000000001f + sLuminance );
-		}
-
-		sHDRLogAverageLuminance = exp( sHDRLogAverageLuminance / ( vlSingle )( uiWidth * uiHeight ) );
-	}
 
 	vlByte *lpSourceEnd = lpSource + ( uiWidth * uiHeight * SourceInfo.uiBytesPerPixel );
 	for ( ; lpSource < lpSourceEnd; lpSource += SourceInfo.uiBytesPerPixel, lpDest += DestInfo.uiBytesPerPixel )
@@ -1286,7 +1430,7 @@ vlBool ConvertTemplated( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUIn
 	return vlTrue;
 }
 
-vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUInt uiHeight, VTFImageFormat SourceFormat, VTFImageFormat DestFormat )
+vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUInt uiHeight, VTFImageFormat SourceFormat, VTFImageFormat DestFormat, vlUInt32 uiCompressedSize )
 {
 	const SVTFImageConvertInfo& SourceInfo = VTFImageConvertInfo[SourceFormat];
 	const SVTFImageConvertInfo& DestInfo = VTFImageConvertInfo[DestFormat];
@@ -1295,6 +1439,49 @@ vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUI
 	{
 		return vlFalse;
 	}
+
+#ifndef SHELLINFO_EXPORTS
+	struct DelAtEndOfScope
+	{
+		~DelAtEndOfScope()
+		{
+			delete[] ptr;
+		}
+
+		vlByte* ptr = nullptr;
+	} delMe;
+
+	if ( uiCompressedSize != 0 )
+	{
+		z_stream zStream;
+		memset( &zStream, 0, sizeof( zStream ) );
+		if ( inflateInit( &zStream ) != Z_OK )
+			return vlFalse;
+
+		zStream.next_in = lpSource;
+		zStream.avail_in = uiCompressedSize;
+		zStream.total_out = 0;
+
+		vlUInt32 size = CVTFFile::ComputeImageSize( uiWidth, uiHeight, 1, SourceFormat );
+		vlByte* pConverted = new vlByte[size];
+		while ( zStream.avail_in )
+		{
+			zStream.next_out = pConverted + zStream.total_out;
+			zStream.avail_out = size - zStream.total_out;
+
+			int zRet = inflate( &zStream, Z_NO_FLUSH );
+			bool zFailure = ( zRet != Z_OK ) && ( zRet != Z_STREAM_END );
+			if ( zFailure || ( ( zRet == Z_STREAM_END ) && ( zStream.total_out != size ) ) )
+			{
+				inflateEnd( &zStream );
+				return vlFalse;
+			}
+		}
+
+		inflateEnd( &zStream );
+		delMe.ptr = lpSource = pConverted;
+	}
+#endif
 
 	if ( SourceFormat == DestFormat )
 	{
@@ -1352,7 +1539,7 @@ vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUI
 			bResult = CVTFFile::DecompressDXT5( lpSource, lpSourceRGBA, uiWidth, uiHeight );
 			break;
 		default:
-			bResult = CVTFFile::Convert( lpSource, lpSourceRGBA, uiWidth, uiHeight, SourceFormat, IMAGE_FORMAT_RGBA8888 );
+			bResult = CVTFFile::Convert( lpSource, lpSourceRGBA, uiWidth, uiHeight, SourceFormat, IMAGE_FORMAT_RGBA8888, 0 );
 			break;
 		}
 
@@ -1366,7 +1553,7 @@ vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUI
 			case IMAGE_FORMAT_DXT5:
 				break;
 			default:
-				bResult = CVTFFile::Convert( lpSourceRGBA, lpDest, uiWidth, uiHeight, IMAGE_FORMAT_RGBA8888, DestFormat );
+				bResult = CVTFFile::Convert( lpSourceRGBA, lpDest, uiWidth, uiHeight, IMAGE_FORMAT_RGBA8888, DestFormat, 0 );
 				break;
 			}
 		}

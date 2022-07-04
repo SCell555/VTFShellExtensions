@@ -31,5 +31,10 @@
 			<typeInfo type="String" isInnate="true" isViewable="true" />
 			<labelInfo label="Format" />
 		</propertyDescription>
+    <propertyDescription name="VTFShellInfo.Version" formatID="{64258FCA-9579-4F73-B280-C0F0BDB866B8}" propID="166">
+			<description>VTF version.</description>
+			<typeInfo type="Double" isInnate="true" isViewable="true" />
+			<labelInfo label="Version" />
+		</propertyDescription>
 	</propertyDescriptionList>
 </schema>

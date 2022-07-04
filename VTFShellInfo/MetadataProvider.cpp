@@ -15,7 +15,8 @@ enum
 	FaceCount,
 	FrameCount,
 	Flags,
-	FormatName
+	FormatName,
+	Version
 };
 
 // {64258FCA-9579-4F73-B280-C0F0BDB866B8}
@@ -27,6 +28,7 @@ static constexpr PROPERTYKEY PKEY_VTF_FaceCount = CreatePropertyKey( CLSID_VTFSh
 static constexpr PROPERTYKEY PKEY_VTF_FrameCount = CreatePropertyKey( CLSID_VTFShellInfoProps, FrameCount );
 static constexpr PROPERTYKEY PKEY_VTF_Flags = CreatePropertyKey( CLSID_VTFShellInfoProps, Flags );
 static constexpr PROPERTYKEY PKEY_VTF_FormatName = CreatePropertyKey( CLSID_VTFShellInfoProps, FormatName );
+static constexpr PROPERTYKEY PKEY_VTF_Version = CreatePropertyKey( CLSID_VTFShellInfoProps, Version );
 
 MetadataProvider::MetadataProvider()
 {
@@ -71,8 +73,8 @@ STDMETHODIMP_( ULONG ) MetadataProvider::Release()
 	return cRef;
 }
 
-template <typename T, typename InitFunc>
-HRESULT MetadataProvider::StoreIntoCache( const T& value, InitFunc&& func, REFPROPERTYKEY key )
+template <typename T, typename U>
+HRESULT MetadataProvider::StoreIntoCache( const T& value, HRESULT( *func )( U, PROPVARIANT* ), REFPROPERTYKEY key )
 {
 	PropVariantSafe variant;
 	if ( const auto hr = func( value, &variant.Get() ); hr != S_OK )
@@ -84,6 +86,9 @@ HRESULT MetadataProvider::StoreIntoCache( const T& value, InitFunc&& func, REFPR
 
 HRESULT MetadataProvider::Initialize( IStream* pstream, DWORD grfMode )
 {
+	if ( m_pCache )
+		return HRESULT_FROM_WIN32( ERROR_ALREADY_INITIALIZED );
+
 	if ( grfMode & STGM_READWRITE )
 		return STG_E_ACCESSDENIED;
 
@@ -92,7 +97,7 @@ HRESULT MetadataProvider::Initialize( IStream* pstream, DWORD grfMode )
 		return S_FALSE;
 
 	ULONG len;
-	const vlUInt size = static_cast<vlUInt>( stat.cbSize.QuadPart );
+	const vlUInt size = static_cast<vlUInt>( min( stat.cbSize.QuadPart, sizeof( SVTFHeader ) ) );
 	byte* data = new byte[size];
 	if ( pstream->Read( data, size, &len ) != S_OK )
 	{
@@ -136,11 +141,14 @@ HRESULT MetadataProvider::Initialize( IStream* pstream, DWORD grfMode )
 	if ( const auto hr = StoreIntoCache( fmtInfo.uiBitsPerPixel, InitPropVariantFromUInt32, PKEY_Image_BitDepth ); hr != S_OK )
 		return hr;
 
-	wchar_t buf[64];
-	mbstowcs_s( nullptr, buf, fmtInfo.lpName, 63 );
-	if ( const auto hr = StoreIntoCache( buf, InitPropVariantFromString, PKEY_VTF_FormatName ); hr != S_OK )
+	if ( const auto hr = StoreIntoCache( fmtInfo.lpName, InitPropVariantFromString, PKEY_VTF_FormatName ); hr != S_OK )
 		return hr;
 
+	auto& ver = vtfFile.GetHeader().Version;
+	if ( const auto hr = StoreIntoCache( ver[0] + ver[1] / 10.0, InitPropVariantFromDouble, PKEY_VTF_Version); hr != S_OK)
+		return hr;
+
+	wchar_t buf[64];
 	swprintf_s( buf, L"%dx%d", vtfFile.GetWidth(), vtfFile.GetHeight() );
 	if ( const auto hr = StoreIntoCache( buf, InitPropVariantFromString, PKEY_Image_Dimensions ); hr != S_OK )
 		return hr;

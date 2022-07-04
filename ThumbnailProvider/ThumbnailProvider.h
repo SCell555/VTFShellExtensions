@@ -4,28 +4,29 @@
 
 class CThumbnailProvider : public IThumbnailProvider, IObjectWithSite, IInitializeWithStream
 {
-private:
-    LONG m_cRef;
-    IUnknown* m_pSite;
-	CVTFFile m_texture;
-
-    ~CThumbnailProvider();
+	~CThumbnailProvider();
 
 public:
-    CThumbnailProvider();
+	CThumbnailProvider();
 
-    //  IUnknown methods
+	//  IUnknown methods
 	STDMETHOD( QueryInterface )( REFIID, void** ) override;
 	STDMETHOD_( ULONG, AddRef )() override;
 	STDMETHOD_( ULONG, Release )() override;
 
-    //  IInitializeWithSteam methods
+	//  IInitializeWithSteam methods
 	STDMETHOD( Initialize )( IStream*, DWORD ) override;
 
-    //  IThumbnailProvider methods
+	//  IThumbnailProvider methods
 	STDMETHOD( GetThumbnail )( UINT, HBITMAP*, WTS_ALPHATYPE* ) override;
 
-    //  IObjectWithSite methods
+	//  IObjectWithSite methods
 	STDMETHOD( GetSite )( REFIID, void** ) override;
 	STDMETHOD( SetSite )( IUnknown* ) override;
+
+private:
+	volatile LONG m_cRef;
+
+	IUnknown* m_pSite;
+	CVTFFile m_texture;
 };

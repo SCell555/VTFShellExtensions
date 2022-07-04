@@ -5,6 +5,8 @@
 #include <propsys.h>
 #include <ShObjIdl.h>
 
+typedef struct tagPROPVARIANT PROPVARIANT;
+
 class MetadataProvider : public IPropertyStore, IPropertyStoreCapabilities, IInitializeWithStream
 {
 	~MetadataProvider();
@@ -26,8 +28,9 @@ public:
 	STDMETHOD( IsPropertyWritable )( REFPROPERTYKEY key ) override;
 
 private:
-	template<typename T, typename InitFunc>
-	HRESULT StoreIntoCache( const T& value, InitFunc&& func, REFPROPERTYKEY key );
+	volatile LONG m_cRef;
+
+	template<typename T, typename U>
+	HRESULT StoreIntoCache( const T& value, HRESULT( *func )( U, PROPVARIANT* ), REFPROPERTYKEY key );
 	IPropertyStoreCache* m_pCache;
-	LONG m_cRef;
 };

@@ -1,8 +1,7 @@
 #pragma once
 
 #include <propvarutil.h>
-
-#include <iostream>
+#include <cassert>
 
 class PropVariantSafe final
 {
@@ -39,8 +38,8 @@ public:
 
 	void Clear()
 	{
-		if ( const auto hr = PropVariantClear( &m_Variant ); hr != S_OK )
-			std::cerr << "Failed to PropVariantClear(): HRESULT = " << std::hex << hr << std::endl;
+		[[maybe_unused]] const auto hr = PropVariantClear( &m_Variant );
+		assert( hr == S_OK );
 	}
 
 	__forceinline PROPVARIANT& operator*() { return m_Variant; }
@@ -52,8 +51,8 @@ public:
 private:
 	void CopyUnsafe( const PROPVARIANT& other )
 	{
-		if ( const auto hr = PropVariantCopy( &m_Variant, &other ); hr != S_OK )
-			std::cerr << "Failed to PropVariantCopy(): HRESULT = " << std::hex << hr << std::endl;
+		[[maybe_unused]] const auto hr = PropVariantCopy( &m_Variant, &other );
+		assert( hr == S_OK );
 	}
 
 	PROPVARIANT m_Variant;

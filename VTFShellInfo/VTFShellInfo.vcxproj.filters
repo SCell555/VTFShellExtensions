@@ -21,10 +21,10 @@
     <ClCompile Include="Main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="vtffile.cpp">
+    <ClCompile Include="MetadataProvider.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="MetadataProvider.cpp">
+    <ClCompile Include="..\ThumbnailProvider\vtffile.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

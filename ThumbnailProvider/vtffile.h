@@ -38,6 +38,7 @@ typedef enum tagVTFResourceEntryType
 	VTF_RSRC_TEXTURE_LOD_SETTINGS = MAKE_VTF_RSRC_IDF( 'L', 'O', 'D', RSRCF_HAS_NO_DATA_CHUNK ),
 	VTF_RSRC_TEXTURE_SETTINGS_EX = MAKE_VTF_RSRC_IDF( 'T', 'S', 'O', RSRCF_HAS_NO_DATA_CHUNK ),
 	VTF_RSRC_KEY_VALUE_DATA = MAKE_VTF_RSRC_ID( 'K', 'V', 'D' ),
+	VTF_RSRC_AUX_COMPRESSION_INFO = MAKE_VTF_RSRC_ID( 'A', 'X', 'C' ),
 	VTF_RSRC_MAX_DICTIONARY_ENTRIES = 32
 } VTFResourceEntryType;
 
@@ -194,7 +195,7 @@ struct SVTFHeader : public SVTFHeader_74_A
 };
 typedef struct tagSVTFImageFormatInfo
 {
-	const vlChar *lpName;					//!< Enumeration text equivalent.
+	const wchar_t *lpName;			//!< Enumeration text equivalent.
 	vlUInt	uiBitsPerPixel;			//!< Format bits per pixel.
 	vlUInt	uiBytesPerPixel;		//!< Format bytes per pixel.
 	vlUInt	uiRedBitsPerPixel;		//!< Format red bits per pixel.  0 for N/A.
@@ -205,6 +206,16 @@ typedef struct tagSVTFImageFormatInfo
 	vlBool	bIsSupported;			//!< Format is supported by VTFLib.
 } SVTFImageFormatInfo;
 #pragma pack()
+
+struct AuxCompressionInfoHeader_t
+{
+	vlUInt32 m_CompressionLevel; // -1 = default compression, 0 = no compression, 1-9 = specific compression from lowest to highest
+};
+
+struct AuxCompressionInfoEntry_t
+{
+	vlUInt32 m_CompressedSize; // Size of compressed face image data
+};
 
 namespace IO
 {
@@ -248,9 +259,16 @@ public:
 	vlUInt GetMipmapCount() const;
 	vlUInt GetFaceCount() const;
 	vlUInt GetFrameCount() const;
+	vlUInt GetFlags() const;
 	VTFImageFormat GetFormat() const;
 
 	vlByte *GetData( vlUInt uiFrame = 0, vlUInt uiFace = 0, vlUInt uiSlice = 0, vlUInt uiMipmapLevel = 0 ) const;
+
+	vlVoid *GetResourceData( vlUInt uiType, vlUInt &uiSize ) const;
+
+	vlUInt GetAuxInfoOffset( vlUInt iFrame, vlUInt iFace, vlUInt iMipLevel ) const;
+
+	const SVTFHeader& GetHeader() const;
 
 public:
 	static SVTFImageFormatInfo const &GetImageFormatInfo( VTFImageFormat ImageFormat );
@@ -266,7 +284,7 @@ private:
 	vlUInt ComputeDataOffset( vlUInt uiFrame, vlUInt uiFace, vlUInt uiSlice, vlUInt uiMipmapLevel, VTFImageFormat ImageFormat ) const;
 
 public:
-	static vlBool Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUInt uiHeight, VTFImageFormat SourceFormat, VTFImageFormat DestFormat );
+	static vlBool Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUInt uiHeight, VTFImageFormat SourceFormat, VTFImageFormat DestFormat, vlUInt32 uiCompressedSize );
 
 private:
 	static vlBool DecompressDXT1( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUInt uiHeight );

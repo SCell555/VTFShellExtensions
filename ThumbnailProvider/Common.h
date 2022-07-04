@@ -1,5 +1,7 @@
 #pragma once
 
+#define GDIPVER     0x0110
+
 #include <windows.h>
 #include <shlobj.h>
 #include <shlwapi.h>
