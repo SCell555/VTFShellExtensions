@@ -137,12 +137,25 @@ HRESULT MetadataProvider::Initialize( IStream* pstream, DWORD grfMode )
 	if ( const auto hr = StoreIntoCache( vtfFile.GetFlags(), InitPropVariantFromUInt32, PKEY_VTF_Flags ); hr != S_OK )
 		return hr;
 
-	const auto& fmtInfo = CVTFFile::GetImageFormatInfo( vtfFile.GetFormat() );
-	if ( const auto hr = StoreIntoCache( fmtInfo.uiBitsPerPixel, InitPropVariantFromUInt32, PKEY_Image_BitDepth ); hr != S_OK )
-		return hr;
+	if ( vtfFile.GetFormat() < 0 || vtfFile.GetFormat() > IMAGE_FORMAT_COUNT )
+	{
+		if ( const auto hr = StoreIntoCache( 0, InitPropVariantFromUInt32, PKEY_Image_BitDepth ); hr != S_OK )
+			return hr;
 
-	if ( const auto hr = StoreIntoCache( fmtInfo.lpName, InitPropVariantFromString, PKEY_VTF_FormatName ); hr != S_OK )
-		return hr;
+		wchar_t tmp[64];
+		_snwprintf_s( tmp, 64, L"Unknown %d", vtfFile.GetFormat() );
+		if ( const auto hr = StoreIntoCache( tmp, InitPropVariantFromString, PKEY_VTF_FormatName ); hr != S_OK )
+			return hr;
+	}
+	else
+	{
+		const auto& fmtInfo = CVTFFile::GetImageFormatInfo( vtfFile.GetFormat() );
+		if ( const auto hr = StoreIntoCache( fmtInfo.uiBitsPerPixel, InitPropVariantFromUInt32, PKEY_Image_BitDepth ); hr != S_OK )
+			return hr;
+
+		if ( const auto hr = StoreIntoCache( fmtInfo.lpName, InitPropVariantFromString, PKEY_VTF_FormatName ); hr != S_OK )
+			return hr;
+	}
 
 	auto& ver = vtfFile.GetHeader().Version;
 	if ( const auto hr = StoreIntoCache( ver[0] + ver[1] / 10.0, InitPropVariantFromDouble, PKEY_VTF_Version); hr != S_OK)

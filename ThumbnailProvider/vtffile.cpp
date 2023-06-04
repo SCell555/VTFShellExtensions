@@ -1,10 +1,16 @@
 ﻿#include "vtffile.h"
+#include <array>
 #include <cstring>
+#include <cfloat>
 #include <cmath>
 
 #ifndef SHELLINFO_EXPORTS
 #undef next_in
 #include "zlib.h"
+
+#define BCDEC_STATIC
+#define BCDEC_IMPLEMENTATION
+#include "bcdec.h"
 #endif
 
 enum CubeMapFaceIndex_t
@@ -511,6 +517,11 @@ vlBool CVTFFile::Load( IO::Readers::IReader *Reader, vlBool bHeaderOnly )
 
 		if ( this->Header->ImageFormat != IMAGE_FORMAT_NONE )
 		{
+			if (this->Header->ImageFormat < 0 || this->Header->ImageFormat > IMAGE_FORMAT_COUNT)
+			{
+				throw 0;
+			}
+
 			this->lpImageData = new vlByte[uiImageBufferSize];
 
 			Reader->Seek( uiImageDataOffset, FILE_BEGIN );
@@ -696,15 +707,49 @@ static constexpr SVTFImageFormatInfo VTFImageFormatInfo[] =
 	{ L"RGB323232F",		 96, 12, 32, 32, 32,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGB323232F
 	{ L"RGBA32323232F",		128, 16, 32, 32, 32, 32, vlFalse,  vlTrue },		// IMAGE_FORMAT_RGBA32323232F
 	{ L"nVidia DST16",		 16,  2,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_DST16
-	{ L"nVidia DST24",		 24,  3,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_DST24
-	{ L"nVidia INTZ",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_INTZ
-	{ L"nVidia RAWZ",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_RAWZ
 	{ L"ATI DST16",			 16,  2,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_ATI_DST16
 	{ L"ATI DST24",			 24,  3,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_ATI_DST24
 	{ L"nVidia NULL",		 32,  4,  0,  0,  0,  0, vlFalse,  vlTrue },		// IMAGE_FORMAT_NV_NULL
 	{ L"ATI1N",				  4,  0,  0,  0,  0,  0,  vlTrue,  vlTrue },		// IMAGE_FORMAT_ATI1N
-	{ L"ATI2N",				  8,  0,  0,  0,  0,  0,  vlTrue,  vlTrue }			// IMAGE_FORMAT_ATI2N
+	{ L"ATI2N",				  8,  0,  0,  0,  0,  0,  vlTrue,  vlTrue },		// IMAGE_FORMAT_ATI2N
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{ L"BC7",					8,  0,  0,  0,  0,  0, vlTrue,  vlTrue  },			// IMAGE_FORMAT_BC7
+	{ L"BC6H",					8,  0,  0,  0,  0,  0, vlTrue,  vlTrue  }			// IMAGE_FORMAT_BC6H
 };
+static_assert(std::size(VTFImageFormatInfo) == IMAGE_FORMAT_COUNT);
 
 SVTFImageFormatInfo const &CVTFFile::GetImageFormatInfo( VTFImageFormat ImageFormat )
 {
@@ -717,6 +762,8 @@ vlUInt CVTFFile::ComputeImageSize( vlUInt uiWidth, vlUInt uiHeight, vlUInt uiDep
 	{
 	case IMAGE_FORMAT_DXT1:
 	case IMAGE_FORMAT_DXT1_ONEBITALPHA:
+	case IMAGE_FORMAT_ATI1N:
+	case IMAGE_FORMAT_DXT1_RUNTIME:
 		if ( uiWidth < 4 && uiWidth > 0 )
 			uiWidth = 4;
 
@@ -726,6 +773,11 @@ vlUInt CVTFFile::ComputeImageSize( vlUInt uiWidth, vlUInt uiHeight, vlUInt uiDep
 		return ( ( uiWidth + 3 ) / 4 ) * ( ( uiHeight + 3 ) / 4 ) * 8 * uiDepth;
 	case IMAGE_FORMAT_DXT3:
 	case IMAGE_FORMAT_DXT5:
+	case IMAGE_FORMAT_ATI2N:
+	case IMAGE_FORMAT_DXT3_RUNTIME:
+	case IMAGE_FORMAT_DXT5_RUNTIME:
+	case IMAGE_FORMAT_BC7:
+	case IMAGE_FORMAT_BC6H:
 		if ( uiWidth < 4 && uiWidth > 0 )
 			uiWidth = 4;
 
@@ -886,101 +938,16 @@ vlUInt CVTFFile::ComputeDataOffset( vlUInt uiFrame, vlUInt uiFace, vlUInt uiSlic
 	return uiOffset;
 }
 
-typedef struct Colour8888
-{
-	vlByte r;		// change the order of names to change the
-	vlByte g;		// order of the output ARGB or BGRA, etc...
-	vlByte b;		// Last one is MSB, 1st is LSB.
-	vlByte a;
-} Colour8888;
-
-typedef struct Colour565
-{
-	vlUInt nBlue : 5;		// order of names changes
-	vlUInt nGreen : 6;		// byte order of output to 32 bit
-	vlUInt nRed : 5;
-} Colour565;
-
-typedef struct DXTAlphaBlockExplicit
-{
-	vlShort row[4];
-} DXTAlphaBlockExplicit;
-
+#ifndef SHELLINFO_EXPORTS
 vlBool CVTFFile::DecompressDXT1( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUInt uiHeight )
 {
-	vlUInt		x, y, i, j, k, Select;
-	vlByte		*Temp;
-	Colour565	*color_0, *color_1;
-	Colour8888	colours[4], *col;
-	vlUInt		bitmask, Offset;
-
-	vlByte nBpp = 4;
-	vlByte nBpc = 1;
-	vlUInt iBps = nBpp * nBpc * uiWidth;
-
-	Temp = src;
-
-	for ( y = 0; y < uiHeight; y += 4 )
+	for ( vlUInt y = 0; y < uiHeight; y += 4 )
 	{
-		for ( x = 0; x < uiWidth; x += 4 )
+		for ( vlUInt x = 0; x < uiWidth; x += 4 )
 		{
-			color_0 = ( ( Colour565* )Temp );
-			color_1 = ( ( Colour565* )( Temp + 2 ) );
-			bitmask = ( ( vlUInt* )Temp )[1];
-			Temp += 8;
-
-			colours[0].r = color_0->nRed << 3;
-			colours[0].g = color_0->nGreen << 2;
-			colours[0].b = color_0->nBlue << 3;
-			colours[0].a = 0xFF;
-
-			colours[1].r = color_1->nRed << 3;
-			colours[1].g = color_1->nGreen << 2;
-			colours[1].b = color_1->nBlue << 3;
-			colours[1].a = 0xFF;
-
-			if ( *( ( vlUShort* )color_0 ) > *( ( vlUShort* )color_1 ) )
-			{
-				colours[2].b = ( 2 * colours[0].b + colours[1].b + 1 ) / 3;
-				colours[2].g = ( 2 * colours[0].g + colours[1].g + 1 ) / 3;
-				colours[2].r = ( 2 * colours[0].r + colours[1].r + 1 ) / 3;
-				colours[2].a = 0xFF;
-
-				colours[3].b = ( colours[0].b + 2 * colours[1].b + 1 ) / 3;
-				colours[3].g = ( colours[0].g + 2 * colours[1].g + 1 ) / 3;
-				colours[3].r = ( colours[0].r + 2 * colours[1].r + 1 ) / 3;
-				colours[3].a = 0xFF;
-			}
-			else
-			{
-				colours[2].b = ( colours[0].b + colours[1].b ) / 2;
-				colours[2].g = ( colours[0].g + colours[1].g ) / 2;
-				colours[2].r = ( colours[0].r + colours[1].r ) / 2;
-				colours[2].a = 0xFF;
-
-				colours[3].b = ( colours[0].b + 2 * colours[1].b + 1 ) / 3;
-				colours[3].g = ( colours[0].g + 2 * colours[1].g + 1 ) / 3;
-				colours[3].r = ( colours[0].r + 2 * colours[1].r + 1 ) / 3;
-				colours[3].a = 0x00;
-			}
-
-			for ( j = 0, k = 0; j < 4; j++ )
-			{
-				for ( i = 0; i < 4; i++, k++ )
-				{
-					Select = ( bitmask & ( 0x03 << k * 2 ) ) >> k * 2;
-					col = &colours[Select];
-
-					if ( ( ( x + i ) < uiWidth ) && ( ( y + j ) < uiHeight ) )
-					{
-						Offset = ( y + j ) * iBps + ( x + i ) * nBpp;
-						dst[Offset + 0] = col->r;
-						dst[Offset + 1] = col->g;
-						dst[Offset + 2] = col->b;
-						dst[Offset + 3] = col->a;
-					}
-				}
-			}
+			auto *dest = dst + ( y * uiWidth + x ) * 4;
+			bcdec_bc1( src, dest, uiWidth * 4 );
+			src += 8;
 		}
 	}
 	return vlTrue;
@@ -988,84 +955,13 @@ vlBool CVTFFile::DecompressDXT1( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUIn
 
 vlBool CVTFFile::DecompressDXT3( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUInt uiHeight )
 {
-	vlUInt		x, y, i, j, k, Select;
-	vlByte		*Temp;
-	Colour565	*color_0, *color_1;
-	Colour8888	colours[4], *col;
-	vlUInt		bitmask, Offset;
-	vlUShort	word;
-	DXTAlphaBlockExplicit *alpha;
-
-	vlByte nBpp = 4;
-	vlByte nBpc = 1;
-	vlUInt iBps = nBpp * nBpc * uiWidth;
-
-	Temp = src;
-
-	for ( y = 0; y < uiHeight; y += 4 )
+	for ( vlUInt y = 0; y < uiHeight; y += 4 )
 	{
-		for ( x = 0; x < uiWidth; x += 4 )
+		for ( vlUInt x = 0; x < uiWidth; x += 4 )
 		{
-			alpha = ( DXTAlphaBlockExplicit* )Temp;
-			Temp += 8;
-			color_0 = ( ( Colour565* )Temp );
-			color_1 = ( ( Colour565* )( Temp + 2 ) );
-			bitmask = ( ( vlUInt* )Temp )[1];
-			Temp += 8;
-
-			colours[0].r = color_0->nRed << 3;
-			colours[0].g = color_0->nGreen << 2;
-			colours[0].b = color_0->nBlue << 3;
-			colours[0].a = 0xFF;
-
-			colours[1].r = color_1->nRed << 3;
-			colours[1].g = color_1->nGreen << 2;
-			colours[1].b = color_1->nBlue << 3;
-			colours[1].a = 0xFF;
-
-			colours[2].b = ( 2 * colours[0].b + colours[1].b + 1 ) / 3;
-			colours[2].g = ( 2 * colours[0].g + colours[1].g + 1 ) / 3;
-			colours[2].r = ( 2 * colours[0].r + colours[1].r + 1 ) / 3;
-			colours[2].a = 0xFF;
-
-			colours[3].b = ( colours[0].b + 2 * colours[1].b + 1 ) / 3;
-			colours[3].g = ( colours[0].g + 2 * colours[1].g + 1 ) / 3;
-			colours[3].r = ( colours[0].r + 2 * colours[1].r + 1 ) / 3;
-			colours[3].a = 0xFF;
-
-			k = 0;
-			for ( j = 0; j < 4; j++ )
-			{
-				for ( i = 0; i < 4; i++, k++ )
-				{
-					Select = ( bitmask & ( 0x03 << k * 2 ) ) >> k * 2;
-					col = &colours[Select];
-
-					if ( ( ( x + i ) < uiWidth ) && ( ( y + j ) < uiHeight ) )
-					{
-						Offset = ( y + j ) * iBps + ( x + i ) * nBpp;
-						dst[Offset + 0] = col->r;
-						dst[Offset + 1] = col->g;
-						dst[Offset + 2] = col->b;
-					}
-				}
-			}
-
-			for ( j = 0; j < 4; j++ )
-			{
-				word = alpha->row[j];
-				for ( i = 0; i < 4; i++ )
-				{
-					if ( ( ( x + i ) < uiWidth ) && ( ( y + j ) < uiHeight ) )
-					{
-						Offset = ( y + j ) * iBps + ( x + i ) * nBpp + 3;
-						dst[Offset] = word & 0x0F;
-						dst[Offset] = dst[Offset] | ( dst[Offset] << 4 );
-					}
-
-					word >>= 4;
-				}
-			}
+			auto *dest = dst + ( y * uiWidth + x ) * 4;
+			bcdec_bc2( src, dest, uiWidth * 4 );
+			src += 16;
 		}
 	}
 	return vlTrue;
@@ -1073,117 +969,132 @@ vlBool CVTFFile::DecompressDXT3( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUIn
 
 vlBool CVTFFile::DecompressDXT5( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUInt uiHeight )
 {
-	vlUInt		x, y, i, j, k, Select;
-	vlByte		*Temp;
-	Colour565	*color_0, *color_1;
-	Colour8888	colours[4], *col;
-	vlUInt		bitmask, Offset;
-	vlByte		alphas[8], *alphamask;
-	vlUInt		bits;
-
-	vlByte nBpp = 4;
-	vlByte nBpc = 1;
-	vlUInt iBps = nBpp * nBpc * uiWidth;
-
-	Temp = src;
-
-	for ( y = 0; y < uiHeight; y += 4 )
+	for ( vlUInt y = 0; y < uiHeight; y += 4 )
 	{
-		for ( x = 0; x < uiWidth; x += 4 )
+		for ( vlUInt x = 0; x < uiWidth; x += 4 )
 		{
-			alphas[0] = Temp[0];
-			alphas[1] = Temp[1];
-			alphamask = Temp + 2;
-			Temp += 8;
-			color_0 = ( ( Colour565* )Temp );
-			color_1 = ( ( Colour565* )( Temp + 2 ) );
-			bitmask = ( ( vlUInt* )Temp )[1];
-			Temp += 8;
+			auto *dest = dst + ( y * uiWidth + x ) * 4;
+			bcdec_bc3( src, dest, uiWidth * 4 );
+			src += 16;
+		}
+	}
+	return vlTrue;
+}
 
-			colours[0].r = color_0->nRed << 3;
-			colours[0].g = color_0->nGreen << 2;
-			colours[0].b = color_0->nBlue << 3;
-			colours[0].a = 0xFF;
-
-			colours[1].r = color_1->nRed << 3;
-			colours[1].g = color_1->nGreen << 2;
-			colours[1].b = color_1->nBlue << 3;
-			colours[1].a = 0xFF;
-
-			colours[2].b = ( 2 * colours[0].b + colours[1].b + 1 ) / 3;
-			colours[2].g = ( 2 * colours[0].g + colours[1].g + 1 ) / 3;
-			colours[2].r = ( 2 * colours[0].r + colours[1].r + 1 ) / 3;
-			colours[2].a = 0xFF;
-
-			colours[3].b = ( colours[0].b + 2 * colours[1].b + 1 ) / 3;
-			colours[3].g = ( colours[0].g + 2 * colours[1].g + 1 ) / 3;
-			colours[3].r = ( colours[0].r + 2 * colours[1].r + 1 ) / 3;
-			colours[3].a = 0xFF;
-
-			k = 0;
-			for ( j = 0; j < 4; j++ )
+vlBool CVTFFile::DecompressATI1N( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUInt uiHeight )
+{
+	for ( vlUInt y = 0; y < uiHeight; y += 4 )
+	{
+		for ( vlUInt x = 0; x < uiWidth; x += 4 )
+		{
+			vlByte buf[4 * 4];
+			bcdec_bc4( src, buf, 4 );
+			auto *dest = dst + ( y * uiWidth + x ) * 4;
+			for ( int y1 = 0; y1 < 4; y1++ )
 			{
-				for ( i = 0; i < 4; i++, k++ )
+				for ( int x1 = 0; x1 < 4; x1++ )
 				{
-					Select = ( bitmask & ( 0x03 << k * 2 ) ) >> k * 2;
-					col = &colours[Select];
-
-					if ( ( ( x + i ) < uiWidth ) && ( ( y + j ) < uiHeight ) )
-					{
-						Offset = ( y + j ) * iBps + ( x + i ) * nBpp;
-						dst[Offset + 0] = col->r;
-						dst[Offset + 1] = col->g;
-						dst[Offset + 2] = col->b;
-					}
+					auto dstLoc = ( y1 * uiWidth + x1 ) * 4;
+					dest[dstLoc + 0] = buf[y1 * 4 + x1];
+					dest[dstLoc + 1] = 0;
+					dest[dstLoc + 2] = 0;
+					dest[dstLoc + 3] = 255;
 				}
 			}
+			src += 8;
+		}
+	}
+	return vlTrue;
+}
 
-			if ( alphas[0] > alphas[1] )
+vlBool CVTFFile::DecompressATI2N( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUInt uiHeight )
+{
+	for ( vlUInt y = 0; y < uiHeight; y += 4 )
+	{
+		for ( vlUInt x = 0; x < uiWidth; x += 4 )
+		{
+			vlByte buf[4 * 4 * 2];
+			bcdec_bc5( src, buf, 4 * 2 );
+			auto *dest = dst + ( y * uiWidth + x ) * 4;
+			for ( int y1 = 0; y1 < 4; y1++ )
 			{
-				alphas[2] = ( 6 * alphas[0] + 1 * alphas[1] + 3 ) / 7;
-				alphas[3] = ( 5 * alphas[0] + 2 * alphas[1] + 3 ) / 7;
-				alphas[4] = ( 4 * alphas[0] + 3 * alphas[1] + 3 ) / 7;
-				alphas[5] = ( 3 * alphas[0] + 4 * alphas[1] + 3 ) / 7;
-				alphas[6] = ( 2 * alphas[0] + 5 * alphas[1] + 3 ) / 7;
-				alphas[7] = ( 1 * alphas[0] + 6 * alphas[1] + 3 ) / 7;
-			}
-			else
-			{
-				alphas[2] = ( 4 * alphas[0] + 1 * alphas[1] + 2 ) / 5;
-				alphas[3] = ( 3 * alphas[0] + 2 * alphas[1] + 2 ) / 5;
-				alphas[4] = ( 2 * alphas[0] + 3 * alphas[1] + 2 ) / 5;
-				alphas[5] = ( 1 * alphas[0] + 4 * alphas[1] + 2 ) / 5;
-				alphas[6] = 0x00;
-				alphas[7] = 0xFF;
-			}
-
-			bits = *( ( int* )alphamask );
-			for ( j = 0; j < 2; j++ )
-			{
-				for ( i = 0; i < 4; i++ )
+				for ( int x1 = 0; x1 < 4; x1++ )
 				{
-					if ( ( ( x + i ) < uiWidth ) && ( ( y + j ) < uiHeight ) )
-					{
-						Offset = ( y + j ) * iBps + ( x + i ) * nBpp + 3;
-						dst[Offset] = alphas[bits & 0x07];
-					}
-					bits >>= 3;
+					auto dstLoc = ( y1 * uiWidth + x1 ) * 4;
+					dest[dstLoc + 0] = buf[y1 * 4 + x1 + 0];
+					dest[dstLoc + 1] = buf[y1 * 4 + x1 + 1];
+					dest[dstLoc + 2] = 0;
+					dest[dstLoc + 3] = 255;
 				}
 			}
+			src += 16;
+		}
+	}
+	return vlTrue;
+}
 
-			bits = *( ( int* )&alphamask[3] );
-			for ( j = 2; j < 4; j++ )
-			{
-				for ( i = 0; i < 4; i++ )
-				{
-					if ( ( ( x + i ) < uiWidth ) && ( ( y + j ) < uiHeight ) )
-					{
-						Offset = ( y + j ) * iBps + ( x + i ) * nBpp + 3;
-						dst[Offset] = alphas[bits & 0x07];
-					}
-					bits >>= 3;
-				}
-			}
+static float ScaleValue( float f, float overbright )
+{
+	return static_cast<int>( std::min( 255.0f, ceil( f * ( 1.0f / overbright ) * 255.f ) ) ) * ( overbright / 255.0f );
+}
+
+vlBool CVTFFile::DecompressBC6H( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUInt uiHeight )
+{
+	float *block = new float[uiWidth * uiHeight * 3];
+	for ( vlUInt y = 0; y < uiHeight; y += 4 )
+	{
+		for ( vlUInt x = 0; x < uiWidth; x += 4 )
+		{
+			auto *dest = block + ( y * uiWidth + x ) * 3;
+			bcdec_bc6h_float( src, dest, uiWidth * 3, true );
+			src += 16;
+		}
+	}
+
+	float largest = -FLT_MAX;
+	for ( vlUInt y = 0; y < uiHeight; ++y )
+	{
+		for ( vlUInt x = 0; x < uiWidth; x += 4 )
+		{
+			auto *dest = block + ( y * uiWidth + x ) * 3;
+			float m = std::max( { dest[0], dest[1], dest[2] } );
+			largest = std::max( largest, ScaleValue( m, 8.0f ) );
+			dest[0] = std::min( dest[0], 8.0f );
+			dest[1] = std::min( dest[1], 8.0f );
+			dest[2] = std::min( dest[2], 8.0f );
+		}
+	}
+
+	largest = std::max( 0.1f, largest );
+
+	memset( dst, 0, size_t( 4 ) * uiWidth * uiHeight );
+	for ( vlUInt y = 0; y < uiHeight; ++y )
+	{
+		for ( vlUInt x = 0; x < uiWidth; ++x )
+		{
+			auto *dest = block + ( y * uiWidth + x ) * 3;
+			auto *dest2 = dst + ( y * uiWidth + x ) * 4;
+
+			dest2[0] = static_cast<vlByte>( 255 * ( dest[0] / largest ) + 0.5f );
+			dest2[1] = static_cast<vlByte>( 255 * ( dest[1] / largest ) + 0.5f );
+			dest2[2] = static_cast<vlByte>( 255 * ( dest[2] / largest ) + 0.5f );
+			dest2[3] = 255;
+		}
+	}
+
+	delete[] block;
+	return vlTrue;
+}
+
+vlBool CVTFFile::DecompressBC7( vlByte *src, vlByte *dst, vlUInt uiWidth, vlUInt uiHeight )
+{
+	for ( vlUInt y = 0; y < uiHeight; y += 4 )
+	{
+		for ( vlUInt x = 0; x < uiWidth; x += 4 )
+		{
+			auto *dest = dst + ( y * uiWidth + x ) * 4;
+			bcdec_bc7( src, dest, uiWidth * 4 );
+			src += 16;
 		}
 	}
 	return vlTrue;
@@ -1206,7 +1117,7 @@ typedef struct tagSVTFImageConvertInfo
 	VTFImageFormat Format;
 } SVTFImageConvertInfo;
 
-static SVTFImageConvertInfo VTFImageConvertInfo[] =
+static constexpr SVTFImageConvertInfo VTFImageConvertInfo[] =
 {
 	{ 32,  4,  8,  8,  8,  8,	 0,	 1,	 2,	 3,	vlFalse,  vlTrue,	IMAGE_FORMAT_RGBA8888 },
 	{ 32,  4,  8,  8,  8,  8,	 3,	 2,	 1,	 0, vlFalse,  vlTrue,	IMAGE_FORMAT_ABGR8888 },
@@ -1239,15 +1150,49 @@ static SVTFImageConvertInfo VTFImageConvertInfo[] =
 	{ 96, 12, 32, 32, 32,  0,	 0,	 1,	 2,	-1, vlFalse, vlFalse,	IMAGE_FORMAT_RGB323232F },
 	{ 128, 16, 32, 32, 32, 32,	 0,	 1,	 2,	 3, vlFalse, vlFalse,	IMAGE_FORMAT_RGBA32323232F },
 	{ 16,  2, 16,  0,  0,  0,	 0,	-1,	-1,	-1, vlFalse,  vlTrue,	IMAGE_FORMAT_NV_DST16 },
-	{ 24,  3, 24,  0,  0,  0,	 0,	-1,	-1,	-1, vlFalse,  vlTrue,	IMAGE_FORMAT_NV_DST24 },
-	{ 32,  4,  0,  0,  0,  0,	-1,	-1,	-1,	-1, vlFalse, vlFalse,	IMAGE_FORMAT_NV_INTZ },
-	{ 24,  3,  0,  0,  0,  0,	-1,	-1,	-1,	-1, vlFalse, vlFalse,	IMAGE_FORMAT_NV_RAWZ },
 	{ 16,  2, 16,  0,  0,  0,	 0,	-1,	-1,	-1, vlFalse,  vlTrue,	IMAGE_FORMAT_ATI_DST16 },
 	{ 24,  3, 24,  0,  0,  0,	 0,	-1,	-1,	-1, vlFalse,  vlTrue,	IMAGE_FORMAT_ATI_DST24 },
 	{ 32,  4,  0,  0,  0,  0,	-1,	-1,	-1,	-1, vlFalse, vlFalse,	IMAGE_FORMAT_NV_NULL },
 	{ 4,  0,  0,  0,  0,  0,	-1, -1, -1, -1,	 vlTrue, vlFalse,	IMAGE_FORMAT_ATI1N },
-	{ 8,  0,  0,  0,  0,  0,	-1, -1, -1, -1,	 vlTrue, vlFalse,	IMAGE_FORMAT_ATI2N }
+	{ 8,  0,  0,  0,  0,  0,	-1, -1, -1, -1,	 vlTrue, vlFalse,	IMAGE_FORMAT_ATI2N },
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{ 8,  0,  0,  0,  0,  0,	-1, -1, -1, -1,	 vlTrue, vlTrue,	IMAGE_FORMAT_BC7 },
+	{ 8,  0,  0,  0,  0,  0,	-1, -1, -1, -1,	 vlTrue, vlTrue,	IMAGE_FORMAT_BC6H },
 };
+static_assert(std::size(VTFImageConvertInfo) == IMAGE_FORMAT_COUNT);
 
 template<typename T>
 vlVoid GetShiftAndMask( const SVTFImageConvertInfo& Info, T &uiRShift, T &uiGShift, T &uiBShift, T &uiAShift, T &uiRMask, T &uiGMask, T &uiBMask, T &uiAMask )
@@ -1440,7 +1385,6 @@ vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUI
 		return vlFalse;
 	}
 
-#ifndef SHELLINFO_EXPORTS
 	struct DelAtEndOfScope
 	{
 		~DelAtEndOfScope()
@@ -1481,7 +1425,6 @@ vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUI
 		inflateEnd( &zStream );
 		delMe.ptr = lpSource = pConverted;
 	}
-#endif
 
 	if ( SourceFormat == DestFormat )
 	{
@@ -1530,13 +1473,28 @@ vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUI
 			break;
 		case IMAGE_FORMAT_DXT1:
 		case IMAGE_FORMAT_DXT1_ONEBITALPHA:
+		case IMAGE_FORMAT_DXT1_RUNTIME:
 			bResult = CVTFFile::DecompressDXT1( lpSource, lpSourceRGBA, uiWidth, uiHeight );
 			break;
 		case IMAGE_FORMAT_DXT3:
+		case IMAGE_FORMAT_DXT3_RUNTIME:
 			bResult = CVTFFile::DecompressDXT3( lpSource, lpSourceRGBA, uiWidth, uiHeight );
 			break;
 		case IMAGE_FORMAT_DXT5:
+		case IMAGE_FORMAT_DXT5_RUNTIME:
 			bResult = CVTFFile::DecompressDXT5( lpSource, lpSourceRGBA, uiWidth, uiHeight );
+			break;
+		case IMAGE_FORMAT_ATI1N:
+			bResult = CVTFFile::DecompressATI1N( lpSource, lpSourceRGBA, uiWidth, uiHeight );
+			break;
+		case IMAGE_FORMAT_ATI2N:
+			bResult = CVTFFile::DecompressATI2N( lpSource, lpSourceRGBA, uiWidth, uiHeight );
+			break;
+		case IMAGE_FORMAT_BC6H:
+			bResult = CVTFFile::DecompressBC6H( lpSource, lpSourceRGBA, uiWidth, uiHeight );
+			break;
+		case IMAGE_FORMAT_BC7:
+			bResult = CVTFFile::DecompressBC7( lpSource, lpSourceRGBA, uiWidth, uiHeight );
 			break;
 		default:
 			bResult = CVTFFile::Convert( lpSource, lpSourceRGBA, uiWidth, uiHeight, SourceFormat, IMAGE_FORMAT_RGBA8888, 0 );
@@ -1551,6 +1509,13 @@ vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUI
 			case IMAGE_FORMAT_DXT1_ONEBITALPHA:
 			case IMAGE_FORMAT_DXT3:
 			case IMAGE_FORMAT_DXT5:
+			case IMAGE_FORMAT_ATI1N:
+			case IMAGE_FORMAT_ATI2N:
+			case IMAGE_FORMAT_DXT1_RUNTIME:
+			case IMAGE_FORMAT_DXT3_RUNTIME:
+			case IMAGE_FORMAT_DXT5_RUNTIME:
+			case IMAGE_FORMAT_BC7:
+			case IMAGE_FORMAT_BC6H:
 				break;
 			default:
 				bResult = CVTFFile::Convert( lpSourceRGBA, lpDest, uiWidth, uiHeight, IMAGE_FORMAT_RGBA8888, DestFormat, 0 );
@@ -1614,3 +1579,4 @@ vlBool CVTFFile::Convert( vlByte *lpSource, vlByte *lpDest, vlUInt uiWidth, vlUI
 		return vlFalse;
 	}
 }
+#endif
